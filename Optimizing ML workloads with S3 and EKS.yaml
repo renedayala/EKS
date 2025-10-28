@@ -1,0 +1,1809 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Deployment for https://s12d.com/stg406
+
+Parameters:
+  WorkshopName:
+    Description: Name of the experiment
+    Type: String
+  Environment:
+    Description: Deployment environment type - WS or participant own AWS account
+    Type: String
+    Default: participant-account
+    AllowedValues:
+      - development
+      - participant-account
+      - workshop-studio
+  AllowedCidrBlocks:
+    Description: Allowed CIDR block
+    Type: CommaDelimitedList
+  TljhVersion:
+    Description: The eksctl version
+    Type: String
+    Default: '2.0.0'
+  KubectlVersion:
+    Description: The kubectl version
+    Type: String
+    Default: '1.30.6/2024-11-15'
+  EksctlVersion:
+    Description: The eksctl version
+    Type: String
+    Default: 'v0.194.0'
+  HelmVersion:
+    Description: The eksctl version
+    Type: String
+    Default: 'v3.16.3'
+  KubernetesVersion:
+    Description: The version of the cluster
+    Type: String
+    Default: '1.30'
+  OpsNamespace:
+    Description: Ops namespace
+    Type: String
+    Default: kube-system
+  MonitoringNamespace:
+    Description: Monitoring namespace
+    Type: String
+    Default: monitoring
+  RayNamespace:
+    Description: Ray namespace
+    Type: String
+    Default: ray
+  CoreDnsAddonVersion:
+    Description: The CoreDNS add-on version
+    Type: String
+    Default: 'v1.11.3-eksbuild.1'
+  KubeProxyAddonVersion:
+    Description: The kube-proxy add-on version
+    Type: String
+    Default: 'v1.30.3-eksbuild.9'
+  VpcCniAddonVersion:
+    Description: The VPC CNI add-on version
+    Type: String
+    Default: 'v1.18.5-eksbuild.1'
+  EbsCsiDriverAddonVersion:
+    Description: The EBS CSI Driver add-on version
+    Type: String
+    Default: 'v1.35.0-eksbuild.1'
+  S3CsiDriverAddonVersion:
+    Description: The S3 CSI Driver add-on version
+    Type: String
+    Default: 'v1.9.0-eksbuild.1'
+  KarpenterVersion:
+    Description: Karpenter version
+    Type: String
+    Default: '1.0.6'
+  MetricsServerChartVersion:
+    Description: The metrics server Helm chart version
+    Type: String
+    Default: '3.12.2'
+  CertManagerChartVersion:
+    Description: The cert-manager Helm chart version
+    Type: String
+    Default: '1.16.1'
+  AlbControllerVersion:
+    Description: The ALB Controller version
+    Type: String
+    Default: 'v2.10.0'
+  AlbControllerChartVersion:
+    Description: The ALB Controller Helm chart version
+    Type: String
+    Default: '1.10.0'
+  KubePromStackChartVersion:
+    Description: The kube-prometheus-stack Helm chart version
+    Type: String
+    Default: '66.2.1'
+  OtelOperatorChartVersion:
+    Description: The OTEL operator Helm chart version
+    Type: String
+    Default: '0.74.2'
+  OtelCollectorVersion:
+    Description: The OTEL collector image version
+    Type: String
+    Default: 'v0.41.1'
+  KubeRayOperatorChartVersion:
+    Description: The KubeRay operator Helm chart version
+    Type: String
+    Default: '1.2.2'
+  RayVersion:
+    Description: The KubeRay operator Helm chart version
+    Type: String
+    Default: '2.38.0'
+
+Mappings:
+  Network:
+    CIDR:
+      VPC: 10.0.0.0/16
+      PublicSubnet1: 10.0.0.0/23
+      PublicSubnet2: 10.0.2.0/23
+      PublicSubnet3: 10.0.4.0/23
+      PrivateSubnet1: 10.0.6.0/23
+      PrivateSubnet2: 10.0.8.0/23
+      PrivateSubnet3: 10.0.10.0/23
+  Regions:
+    us-west-2:
+      AmiId: ami-0075013580f6322a1
+      EksOptimizedAmdAmiId: ami-0f8aa9bec24ffebeb
+      AssetsBucketName: ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0
+      AssetsBucketPrefix: 63250ecc-20e7-451c-b376-90997d4f8d02
+
+    eu-central-1:
+      AmiId: ami-07652eda1fbad7432
+      EksOptimizedAmdAmiId: ami-0d6c630f239d638a6
+      AssetsBucketName: ws-assets-prod-iad-r-fra-b129423e91500967
+      AssetsBucketPrefix: 63250ecc-20e7-451c-b376-90997d4f8d02
+
+Conditions:
+  IsDev: !Equals [!Ref Environment, 'development']
+  IsWs: !Equals [!Ref Environment, 'workshop-studio']
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [Network, CIDR, VPC]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref WorkshopName
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Network, CIDR, PublicSubnet1]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-public-subnet-0
+        - Key: kubernetes.io/role/elb
+          Value: 1
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Network, CIDR, PublicSubnet2]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-public-subnet-1
+        - Key: kubernetes.io/role/elb
+          Value: 1
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Network, CIDR, PublicSubnet3]
+      AvailabilityZone: !Select [2, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-public-subnet-2
+        - Key: kubernetes.io/role/elb
+          Value: 1
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Network, CIDR, PrivateSubnet1]
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-private-subnet-0
+        - Key: kubernetes.io/role/internal-elb
+          Value: 1
+        - Key: karpenter.sh/discovery
+          Value: !Ref WorkshopName
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Network, CIDR, PrivateSubnet2]
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-private-subnet-1
+        - Key: kubernetes.io/role/internal-elb
+          Value: 1
+        - Key: karpenter.sh/discovery
+          Value: !Ref WorkshopName
+  PrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !FindInMap [Network, CIDR, PrivateSubnet3]
+      AvailabilityZone: !Select [2, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-private-subnet-2
+        - Key: kubernetes.io/role/internal-elb
+          Value: 1
+        - Key: karpenter.sh/discovery
+          Value: !Ref WorkshopName
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref WorkshopName
+  VPCIGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref IGW
+      VpcId: !Ref VPC
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-public-subnets
+  IGWRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VPCIGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  NGWEIP:
+    Type: AWS::EC2::EIP
+    DependsOn: VPCIGWAttachment
+    Properties:
+      Domain: vpc
+  NGW:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NGWEIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Ref WorkshopName
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-private-subnets
+  NGWRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NGW
+  S3GatewayEndpointRoute:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcEndpointType: Gateway
+      VpcId: !Ref VPC
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:*
+            Resource:
+              - arn:aws:s3*
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.s3
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+  PrivateSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet3
+      RouteTableId: !Ref PrivateRouteTable
+
+  SharedSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${WorkshopName}-shared-sg
+      GroupDescription: Shared security group to ensure traffic within VPC
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-shared-sg
+        - Key: !Sub kubernetes.io/cluster/${WorkshopName}'
+          Value: owned
+        - Key: karpenter.sh/discovery
+          Value: !Ref WorkshopName
+  SharedSecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow self-originating ingress traffic
+      GroupId: !Ref SharedSecurityGroup
+      SourceSecurityGroupId: !Ref SharedSecurityGroup
+      IpProtocol: -1
+  SharedSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow all egress traffic
+      GroupId: !Ref SharedSecurityGroup
+      IpProtocol: -1
+      CidrIp: 0.0.0.0/0
+
+  # ------------------- CloudTrail -------------------
+
+  # CloudTrailBucket:
+  #   Type: AWS::S3::Bucket
+  #   DeletionPolicy: Delete
+  #   Properties:
+  #     BucketName: !Sub ${WorkshopName}-${AWS::Region}-${AWS::AccountId}-cloudtrail
+  # CloudTrailBucketPolicy:
+  #   Type: AWS::S3::BucketPolicy
+  #   Properties:
+  #     Bucket: !Ref CloudTrailBucket
+  #     PolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Sid: AWSCloudTrailAclCheck
+  #           Effect: Allow
+  #           Action:
+  #             - s3:GetBucketAcl
+  #           Principal:
+  #             Service: cloudtrail.amazonaws.com
+  #           Resource: !GetAtt CloudTrailBucket.Arn
+  #           Condition:
+  #             StringEquals:
+  #               'aws:SourceArn': !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${WorkshopName}
+  #         - Sid: AWSCloudTrailWrite
+  #           Effect: Allow
+  #           Action:
+  #             - s3:PutObject
+  #           Principal:
+  #             Service: cloudtrail.amazonaws.com
+  #           Resource: !Sub ${CloudTrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*
+  #           Condition:
+  #             StringEquals:
+  #               'aws:SourceArn': !Sub arn:aws:cloudtrail:${AWS::Region}:${AWS::AccountId}:trail/${WorkshopName}
+  #               s3:x-amz-acl: bucket-owner-full-control
+  # ParticipantCloudTrail:
+  #   Type: AWS::CloudTrail::Trail
+  #   DependsOn:
+  #     - CloudTrailBucketPolicy
+  #   Properties:
+  #     TrailName: !Ref WorkshopName
+  #     S3BucketName: !Sub ${WorkshopName}-${AWS::Region}-${AWS::AccountId}-cloudtrail
+  #     IsLogging: true
+
+  # ------------------- Workshop S3 bucket -------------------
+
+  WorkshopBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub ${WorkshopName}-${AWS::Region}-${AWS::AccountId}
+
+  # ------------------- Security Groups -------------------
+
+  NlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${WorkshopName}-jupyterhub-nlb-sg
+      GroupDescription: NLB security group to ensure traffic from local
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - Description: Allow HTTP traffic from your local machine
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Select [0, !Ref AllowedCidrBlocks]
+      SecurityGroupEgress:
+        - Description: Allow all egress traffic
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-nlb-sg
+  SharedSecurityGroupNlbIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow ingress traffic from NLB security group
+      GroupId: !Ref SharedSecurityGroup
+      SourceSecurityGroupId: !Ref NlbSecurityGroup
+      IpProtocol: -1
+
+  # ------------------- NLB -------------------
+
+  JupyterHubNetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${WorkshopName}-jupyterhub-nlb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref NlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+        - !Ref PublicSubnet3
+      Type: network
+      Tags:
+        - Key: Environment
+          Value: workshop
+        - Key: App
+          Value: jupyterhub
+  JupyterHubLoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${WorkshopName}-jupyterhub-tg
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref VPC
+      HealthCheckEnabled: True
+      HealthCheckIntervalSeconds: 10
+      HealthCheckProtocol: TCP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 3
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60
+      TargetType: instance
+      Targets:
+        - Id: !Ref Instance
+          Port: 80
+  JupyterHubLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref JupyterHubLoadBalancerTargetGroup
+      LoadBalancerArn: !Ref JupyterHubNetworkLoadBalancer
+      Port: '80'
+      Protocol: TCP
+
+  # ------------------- JupyterHub instance -------------------
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: JupyterHub EC2 instance role
+      RoleName: !Sub ${WorkshopName}-jupyterhub-instance-role
+      MaxSessionDuration: 14400
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        - PolicyName: !Sub ${WorkshopName}-jupyter-s3-access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                Resource: !Sub ${WorkshopBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - iam:DetachRolePolicy
+                  - iam:DeletePolicy
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${WorkshopName}-aws-load-balancer-controller-role
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/${WorkshopName}-aws-load-balancer-controller-policy
+              - Effect: Allow
+                Action:
+                  - iam:DeleteOpenIDConnectProvider
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/*
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles: [!Ref InstanceRole]
+  Volume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Delete
+    Properties:
+      VolumeType: gp3
+      Encrypted: true
+      Size: 46
+      Throughput: 300
+      AvailabilityZone: !Select [0, !GetAZs '']
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c5.4xlarge
+      ImageId: !FindInMap [Regions, !Ref AWS::Region, AmiId]
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds:
+        - !Ref SharedSecurityGroup
+      SubnetId: !Ref PrivateSubnet1
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeType: gp3
+            VolumeSize: 32
+            DeleteOnTermination: true
+            Encrypted: true
+      Volumes:
+        - Device: /dev/sdf
+          VolumeId: !Ref Volume
+      Tags:
+        - Key: Name
+          Value: !Sub ${WorkshopName}-jupyterhub-instance
+        - Key: Environment
+          Value: workshop
+        - Key: App
+          Value: jupyterhub
+
+  # ------------------- KMS -------------------
+
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub KMS key to be used during ${WorkshopName} (Amazon EKS, etc.)
+      Enabled: true
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: 2012-10-17
+        Id: workshop-key
+        Statement:
+          - Sid: Enable IAM principal permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow usage of the key
+            Effect: Allow
+            Principal:
+              AWS: !GetAtt InstanceRole.Arn
+            Action:
+              - kms:DescribeKey
+              - kms:Encrypt
+              - kms:Decrypt
+              - kms:ReEncrypt*
+              - kms:GenerateDataKey
+              - kms:GenerateDataKeyWithoutPlaintext
+            Resource: '*'
+
+  # ------------------- Cluster -------------------
+
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-cluster-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+  Cluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref WorkshopName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt ClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref SharedSecurityGroup
+        SubnetIds:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+          - !Ref PrivateSubnet3
+        EndpointPublicAccess: !If [IsDev, true, false]
+        EndpointPrivateAccess: true
+        PublicAccessCidrs:
+          Fn::If:
+            - IsDev
+            - !Ref AllowedCidrBlocks
+            - !Ref AWS::NoValue
+      EncryptionConfig:
+        - Provider:
+            KeyArn: !GetAtt KMSKey.Arn
+          Resources:
+            - secrets
+      AccessConfig:
+        BootstrapClusterCreatorAdminPermissions: true
+        AuthenticationMode: API_AND_CONFIG_MAP
+  ClusterSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow ingress traffic from shared security group to EKS cluster security group
+      GroupId: !GetAtt Cluster.ClusterSecurityGroupId
+      SourceSecurityGroupId: !Ref SharedSecurityGroup
+      IpProtocol: -1
+  SharedSecurityGroupEKSIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow ingress traffic from EKS cluster security group to shared security group
+      GroupId: !Ref SharedSecurityGroup
+      SourceSecurityGroupId: !GetAtt Cluster.ClusterSecurityGroupId
+      IpProtocol: -1
+
+  # ------------------- Cluster Access -------------------
+
+  AdminAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    DependsOn: Cluster
+    Properties:
+      ClusterName: !Ref WorkshopName
+      Type: STANDARD
+      PrincipalArn: !GetAtt InstanceRole.Arn
+      AccessPolicies:
+        - PolicyArn: arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+          AccessScope:
+            Type: cluster
+
+  # ------------------- Fargate & OIDC -------------------
+
+  FargatePodExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-fargate-pod-exec-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          Effect: Allow
+          Principal:
+            Service:
+              - eks-fargate-pods.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy
+  SystemFargateProfile:
+    Type: AWS::EKS::FargateProfile
+    DependsOn: Cluster
+    Properties:
+      FargateProfileName: system
+      ClusterName: !Ref WorkshopName
+      PodExecutionRoleArn: !GetAtt FargatePodExecutionRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Selectors:
+        - Namespace: kube-system
+  MonitoringFargateProfile:
+    Type: AWS::EKS::FargateProfile
+    DependsOn:
+      - Cluster
+      - SystemFargateProfile
+    Properties:
+      FargateProfileName: monitoring
+      ClusterName: !Ref WorkshopName
+      PodExecutionRoleArn: !GetAtt FargatePodExecutionRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Selectors:
+        - Namespace: monitoring
+  RayFargateProfile:
+    Type: AWS::EKS::FargateProfile
+    DependsOn:
+      - Cluster
+      - SystemFargateProfile
+      - MonitoringFargateProfile
+    Properties:
+      FargateProfileName: ray
+      ClusterName: !Ref WorkshopName
+      PodExecutionRoleArn: !GetAtt FargatePodExecutionRole.Arn
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Selectors:
+        - Namespace: ray
+          Labels:
+            - Key: app.kubernetes.io/name
+              Value: kuberay-operator
+        - Namespace: ray
+          Labels:
+            - Key: app.kubernetes.io/name
+              Value: kuberay
+            - Key: ray.io/node-type
+              Value: head
+
+  # ------------------- EKS Addons -------------------
+
+  CoreDns:
+    Type: AWS::EKS::Addon
+    DependsOn:
+      - SystemFargateProfile
+      - MonitoringFargateProfile
+      - RayFargateProfile
+    Properties:
+      AddonName: coredns
+      AddonVersion: !Ref CoreDnsAddonVersion
+      ClusterName: !Ref WorkshopName
+      ResolveConflicts: OVERWRITE
+
+  KubeProxy:
+    Type: AWS::EKS::Addon
+    DependsOn:
+      - SystemFargateProfile
+      - MonitoringFargateProfile
+      - RayFargateProfile
+    Properties:
+      AddonName: kube-proxy
+      AddonVersion: !Ref KubeProxyAddonVersion
+      ClusterName: !Ref WorkshopName
+      ResolveConflicts: OVERWRITE
+
+  VpcCniRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:kube-system:aws-node"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+  VpcCni:
+    Type: AWS::EKS::Addon
+    DependsOn:
+      - SystemFargateProfile
+      - MonitoringFargateProfile
+      - RayFargateProfile
+    Properties:
+      AddonName: vpc-cni
+      AddonVersion: !Ref VpcCniAddonVersion
+      ClusterName: !Ref WorkshopName
+      ServiceAccountRoleArn: !GetAtt VpcCniRole.Arn
+      ResolveConflicts: OVERWRITE
+
+  EbsCsiDriverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy
+  EbsCsiDriver:
+    Type: AWS::EKS::Addon
+    DependsOn:
+      - SystemFargateProfile
+      - MonitoringFargateProfile
+      - RayFargateProfile
+    Properties:
+      AddonName: aws-ebs-csi-driver
+      AddonVersion: !Ref EbsCsiDriverAddonVersion
+      ClusterName: !Ref WorkshopName
+      ServiceAccountRoleArn: !GetAtt EbsCsiDriverRole.Arn
+      ResolveConflicts: OVERWRITE
+
+  S3CsiDriverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:kube-system:s3-csi-driver-sa"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+      Policies:
+        - PolicyName: !Sub ${WorkshopName}-s3-mountpoint-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - aps:GetSeries
+                  - aps:GetLabels
+                  - aps:GetMetricMetadata
+                Resource: !GetAtt WorkshopBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                  - s3:DeleteObject
+                Resource: !Sub
+                  - '${arn}/*'
+                  - arn: !GetAtt WorkshopBucket.Arn
+  S3CsiDriver:
+    Type: AWS::EKS::Addon
+    DependsOn:
+      - SystemFargateProfile
+      - MonitoringFargateProfile
+      - RayFargateProfile
+    Properties:
+      AddonName: aws-mountpoint-s3-csi-driver
+      AddonVersion: !Ref S3CsiDriverAddonVersion
+      ClusterName: !Ref WorkshopName
+      ServiceAccountRoleArn: !GetAtt S3CsiDriverRole.Arn
+      ConfigurationValues: '{"node":{"tolerateAllTaints":true}}'
+      ResolveConflicts: OVERWRITE
+
+  # ------------------- EKS controllers -------------------
+
+  RayWorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-ray-worker-role
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:ray:ray-worker"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+  OtelCollectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-otel-collector-role
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:monitoring:otel-collector"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+      Policies:
+        - PolicyName: !Sub ${WorkshopName}-amp-remote-write-assume-role-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: '*'
+  AmpRemoteWriteRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-amp-remote-write-role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt OtelCollectorRole.Arn
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${WorkshopName}-amp-remote-write-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aps:RemoteWrite
+                  - aps:GetSeries
+                  - aps:GetLabels
+                  - aps:GetMetricMetadata
+                Resource: '*'
+  AlbControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-aws-load-balancer-controller-role
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:kube-system:aws-load-balancer-controller"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+  KarpenterControllerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${WorkshopName}-karpenter-controller-role
+      AssumeRolePolicyDocument:
+        # prettier-ignore
+        Fn::Sub:
+          - '{
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": "sts:AssumeRoleWithWebIdentity",
+                  "Condition": {
+                    "StringEquals": {
+                      "${OpenIdConnectIssuerId}:aud": "sts.amazonaws.com",
+                      "${OpenIdConnectIssuerId}:sub": "system:serviceaccount:kube-system:karpenter"
+                    }
+                  },
+                  "Effect": "Allow",
+                  "Principal": {
+                    "Federated": "arn:aws:iam::${AccountId}:oidc-provider/${OpenIdConnectIssuerId}"
+                  }
+                }
+              ]
+            }'
+          - {
+              OpenIdConnectIssuerId: !Select [1, !Split ["//", !GetAtt Cluster.OpenIdConnectIssuerUrl]],
+              AccountId: !Sub "${AWS::AccountId}"
+            }
+
+  # ------------------- Workshop bootstrap -------------------
+
+  WorkshopBootstrapSSMDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub ${WorkshopName}-workshop-bootstrap
+      TargetType: /AWS::EC2::Instance
+      DocumentType: Command
+      Content:
+        schemaVersion: '2.2'
+        description: Workshop bootstrap
+        parameters:
+          WorkshopName:
+            description: Workshop name
+            type: String
+            default: !Ref WorkshopName
+          AssetsBucketName:
+            description: Assets bucket
+            type: String
+            default: !FindInMap [Regions, !Ref AWS::Region, AssetsBucketName]
+          AssetsBucketPrefix:
+            description: Assets bucket prefix
+            type: String
+            default: !FindInMap [Regions, !Ref AWS::Region, AssetsBucketPrefix]
+          AccountId:
+            description: Account ID
+            type: String
+            default: !Ref AWS::AccountId
+          Region:
+            description: Region
+            type: String
+            default: !Ref AWS::Region
+          VpcId:
+            description: VPC ID
+            type: String
+            default: !Ref VPC
+          PrivateSubnet1Id:
+            description: Private subnet 1 ID
+            type: String
+            default: !Ref PrivateSubnet1
+          PrivateSubnet1AZ:
+            description: Private subnet 1 AZ
+            type: String
+            default: !Select [0, !GetAZs '']
+          PrivateSubnet2Id:
+            description: Private subnet 2 ID
+            type: String
+            default: !Ref PrivateSubnet2
+          PrivateSubnet2AZ:
+            description: Private subnet 2 AZ
+            type: String
+            default: !Select [1, !GetAZs '']
+          PrivateSubnet3Id:
+            description: Private subnet 3 ID
+            type: String
+            default: !Ref PrivateSubnet3
+          PrivateSubnet3AZ:
+            description: Private subnet 3 AZ
+            type: String
+            default: !Select [2, !GetAZs '']
+          PublicSubnet1Id:
+            description: Public subnet 1 ID
+            type: String
+            default: !Ref PublicSubnet1
+          PublicSubnet1AZ:
+            description: Public subnet 1 AZ
+            type: String
+            default: !Select [0, !GetAZs '']
+          PublicSubnet2Id:
+            description: Public subnet 2 ID
+            type: String
+            default: !Ref PublicSubnet2
+          PublicSubnet2AZ:
+            description: Public subnet 2 AZ
+            type: String
+            default: !Select [1, !GetAZs '']
+          PublicSubnet3Id:
+            description: Public subnet 3 ID
+            type: String
+            default: !Ref PublicSubnet3
+          PublicSubnet3AZ:
+            description: Public subnet 3 AZ
+            type: String
+            default: !Select [2, !GetAZs '']
+          SharedSecurityGroupId:
+            description: Shared cluster security group
+            type: String
+            default: !Ref SharedSecurityGroup
+          KubectlVersion:
+            type: String
+            default: !Ref KubectlVersion
+          EksctlVersion:
+            type: String
+            default: !Ref EksctlVersion
+          HelmVersion:
+            type: String
+            default: !Ref HelmVersion
+          TljhVersion:
+            type: String
+            default: !Ref TljhVersion
+          JupyterHubNlbDns:
+            description: JupyterHub NLB DNS
+            type: String
+            default: !GetAtt JupyterHubNetworkLoadBalancer.DNSName
+          WorkshopBucket:
+            description: Workshop general bucket
+            type: String
+            default: !Ref WorkshopBucket
+          AllowedCidrBlocks:
+            description: CIDR block allowed to access NLBs
+            type: String
+            default: !Select [0, !Ref AllowedCidrBlocks]
+          OpsNamespace:
+            description: Ops namespace
+            type: String
+            default: !Ref OpsNamespace
+          MonitoringNamespace:
+            description: Ops namespace
+            type: String
+            default: !Ref MonitoringNamespace
+          RayNamespace:
+            description: Ops namespace
+            type: String
+            default: !Ref RayNamespace
+          ClusterName:
+            description: Experiment name
+            type: String
+            default: !Ref WorkshopName
+          KubernetesVersion:
+            type: String
+            default: !Ref KubernetesVersion
+          EksOptimizedAmdAmiId:
+            type: String
+            default: !FindInMap [Regions, !Ref AWS::Region, EksOptimizedAmdAmiId]
+          KarpenterVersion:
+            type: String
+            default: !Ref KarpenterVersion
+          KarpenterStackName:
+            type: String
+            default:
+              Fn::If:
+                - IsWs
+                - karpenter
+                - !Sub ${WorkshopName}-karpenter
+          SystemNodes:
+            type: String
+            default: system:node:{{EC2PrivateDNSName}}
+          MetricsServerChartVersion:
+            type: String
+            default: !Ref MetricsServerChartVersion
+          CertManagerChartVersion:
+            type: String
+            default: !Ref CertManagerChartVersion
+          AlbControllerVersion:
+            type: String
+            default: !Ref AlbControllerVersion
+          AlbControllerChartVersion:
+            type: String
+            default: !Ref AlbControllerChartVersion
+          KubePromStackChartVersion:
+            type: String
+            default: !Ref KubePromStackChartVersion
+          OtelOperatorChartVersion:
+            type: String
+            default: !Ref OtelOperatorChartVersion
+          OtelCollectorVersion:
+            type: String
+            default: !Ref OtelCollectorVersion
+          KubeRayOperatorChartVersion:
+            type: String
+            default: !Ref KubeRayOperatorChartVersion
+          RayVersion:
+            type: String
+            default: !Ref RayVersion
+          CfnUpdateUrl:
+            description: CloudFormation update URL
+            type: String
+            default: !Ref WaitForClusterBootstrapHandle
+        mainSteps:
+          - action: aws:runShellScript
+            name: JupyterHubInstanceEKSBootstrap
+            inputs:
+              timeoutSeconds: '3600'
+              runCommand:
+                - |
+                  cmd='
+                    echo "------------------- Mount EBS -------------------"
+
+                    sudo mkfs -t xfs /dev/nvme1n1
+                    sudo mkdir /local_data
+                    sudo mount /dev/nvme1n1 /local_data
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                # - |
+                #   cmd='
+                #     pip install --user virtualenv
+                #     python3 -m virtualenv -p python3 venv
+                #     source venv/bin/activate
+                #     pip install scoutsuite
+                #   '
+                #   runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                  echo "------------------- Define functions -------------------"
+
+                  echo "#!/bin/bash" | tee -a  ~/.bash_profile
+
+                  cat << EOF | tee -a  ~/.bash_profile
+                  function define {
+                      var=\$1
+                      val=\$2
+
+                      declare -g \${var}="\${val}"
+                      echo "export \${var}=\${val}" | tee -a ~/.bash_profile
+                  }
+                  EOF
+
+                  source ~/.bash_profile
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Define environment variables -------------------"
+
+                    define UUID $(uuidgen)
+
+                    define IP "\$(curl -s checkip.amazonaws.com)"
+
+                    define WORKSHOP_NAME {{WorkshopName}}
+
+                    define AWS_ACCOUNT {{AccountId}}
+                    define AWS_REGION {{Region}}
+
+                    define VPC_ID {{VpcId}}
+
+                    define PRIVATE_SUBNET_1_ID {{PrivateSubnet1Id}}
+                    define PRIVATE_SUBNET_1_AZ {{PrivateSubnet1AZ}}
+                    define PRIVATE_SUBNET_2_ID {{PrivateSubnet2Id}}
+                    define PRIVATE_SUBNET_2_AZ {{PrivateSubnet2AZ}}
+                    define PRIVATE_SUBNET_3_ID {{PrivateSubnet3Id}}
+                    define PRIVATE_SUBNET_3_AZ {{PrivateSubnet3AZ}}
+
+                    define PUBLIC_SUBNET_1_ID {{PublicSubnet1Id}}
+                    define PUBLIC_SUBNET_1_AZ {{PublicSubnet1AZ}}
+                    define PUBLIC_SUBNET_2_ID {{PublicSubnet2Id}}
+                    define PUBLIC_SUBNET_2_AZ {{PublicSubnet2AZ}}
+                    define PUBLIC_SUBNET_3_ID {{PublicSubnet3Id}}
+                    define PUBLIC_SUBNET_3_AZ {{PublicSubnet3AZ}}
+
+                    define SHARED_SG_ID {{SharedSecurityGroupId}}
+
+                    define WORKSHOP_BUCKET {{WorkshopBucket}}
+
+                    define KUBECTL_VERSION {{KubectlVersion}}
+                    define EKSCTL_VERSION {{EksctlVersion}}
+                    define HELM_VERSION {{HelmVersion}}
+
+                    define TLJH_VERSION {{TljhVersion}}
+                    define JUPYTER_HUB_NLB_DNS {{JupyterHubNlbDns}}
+
+                    source ~/.bash_profile
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install jq -------------------"
+
+                    sudo snap install jq
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install AWS CLI -------------------"
+
+                    sudo snap install aws-cli --classic
+
+                    # sudo apt-get install unzip
+                    # curl -sL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+                    # unzip -q awscliv2.zip
+                    # sudo ./aws/install --update
+                    # rm -rf aws
+                    # rm awscliv2.zip
+
+                    aws configure set default.region {{Region}}
+
+                    echo "AWS: $(aws --version)" | tee -a log.txt
+                    aws sts get-caller-identity --query 'Arn' --output text | tee -a log.txt
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Download assets -------------------"
+
+                    echo "Assets path: s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}" | tee -a log.txt
+
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/scripts/validate.sh ./assets/scripts/validate.sh
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/scripts/cleanup.sh ./assets/scripts/cleanup.sh
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/ray/cluster.yml ./assets/ray/cluster.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/notebook.zip ./assets/notebook.zip
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/mountpoint/volumes.yml ./assets/mountpoint/volumes.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/monitoring/prom-stack-values.yml ./assets/monitoring/prom-stack-values.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/monitoring/dashboards.yml ./assets/monitoring/dashboards.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/monitoring/adot.yml ./assets/monitoring/adot.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/karpenter/default-nodepool.yml ./assets/karpenter/default-nodepool.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/karpenter/default-nodeclass.yml ./assets/karpenter/default-nodeclass.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/general/services.yml ./assets/general/services.yml
+                    aws s3 cp s3://{{AssetsBucketName}}/{{AssetsBucketPrefix}}/experiments/definitions.yml ./assets/experiments/definitions.yml
+
+                    chmod 0777 assets/scripts/validate.sh
+                    chmod 0777 assets/scripts/cleanup.sh
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install JupyterHub -------------------"
+
+                    sudo curl -L https://tljh.jupyter.org/bootstrap.py | sudo python3 - --admin admin:admin --version ${TLJH_VERSION}
+                    sudo -EH pip install --quiet --no-input -U there --target=/opt/tljh/user/bin
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install Python packages -------------------"
+
+                    sudo /opt/tljh/user/bin/python3.12 -m pip install \
+                      --quiet --upgrade --no-input "ray[default]" torchvision boto3 seaborn \
+                      --target=/opt/tljh/user/lib/python3.12/site-packages
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install kubectl -------------------"
+
+                    curl -sLO https://s3.us-west-2.amazonaws.com/amazon-eks/${KUBECTL_VERSION}/bin/linux/amd64/kubectl
+                    sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+                    rm kubectl
+
+                    kubectl completion bash | tee -a  ~/.bash_completion
+                    . /etc/profile.d/bash_completion.sh
+                    . ~/.bash_completion
+
+                    echo "kubectl: $(kubectl version --client --output yaml)"  | tee -a log.txt
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install eksctl -------------------"
+
+                    curl -sL https://github.com/eksctl-io/eksctl/releases/download/${EKSCTL_VERSION}/eksctl_Linux_amd64.tar.gz | tar xz -C /tmp
+                    sudo mv /tmp/eksctl /usr/local/bin
+
+                    echo "eksctl: $(eksctl version)"  | tee -a log.txt
+
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install Helm -------------------"
+
+                    curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/${HELM_VERSION}/scripts/get-helm-3
+                    chmod 700 get_helm.sh
+                    ./get_helm.sh
+
+                    rm get_helm.sh
+
+                    echo "helm: $(helm version --short)"  | tee -a log.txt
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Instal SageMaker Bencher -------------------"
+
+                    git clone https://github.com/aws-samples/sagemaker-bencher.git
+
+                    cd sagemaker-bencher/
+
+                    pip3 install -r requirements.txt --ignore-installed requests
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- SageMaker Bencher -------------------"
+
+                    cd sagemaker-bencher/
+
+                    envsubst < ~/assets/experiments/definitions.yml > definitions.yml
+
+                    sudo mkdir -p /local_data/dataset
+                    sudo chmod -R a+rw /local_data/dataset
+
+                    python3 bencher.py -f definitions.yml  --bootstrap /local_data/dataset
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Define additional environment variables -------------------"
+
+                    define CFN_UPDATE_URL "\"{{CfnUpdateUrl}}\""
+
+                    define CLUSTER_NAME {{ClusterName}}
+                    define K8S_VERSION {{KubernetesVersion}}
+                    define EKS_OPTIMIZED_AMD_AMI_ID {{EksOptimizedAmdAmiId}}
+                    define OPS_NS {{OpsNamespace}}
+                    define MONITORING_NS {{MonitoringNamespace}}
+                    define RAY_NS {{RayNamespace}}
+                    define ALLOWED_CIDR_BLOCKS "{{AllowedCidrBlocks}}"
+
+                    define KARPENTER_VERSION {{KarpenterVersion}}
+                    define KARPENTER_STACK_NAME {{KarpenterStackName}}
+                    define METRICS_SERVER_CHART_VERSION {{MetricsServerChartVersion}}
+                    define CERT_MANAGER_CHART_VERSION {{CertManagerChartVersion}}
+                    define ALB_CONTROLLER_VERSION {{AlbControllerVersion}}
+                    define ALB_CONTROLLER_CHART_VERSION {{AlbControllerChartVersion}}
+                    define KUBE_PROM_STACK_CHART_VERSION {{KubePromStackChartVersion}}
+                    define OTEL_OPERATOR_CHART_VERSION {{OtelOperatorChartVersion}}
+                    define OTEL_COLLECTOR_VERSION {{OtelCollectorVersion}}
+                    define KUBERAY_OPERATOR_CHART_VERSION {{KubeRayOperatorChartVersion}}
+                    define RAY_VERSION {{RayVersion}}
+
+                    source ~/.bash_profile
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Configure kubeconfig -------------------"
+
+                    aws eks update-kubeconfig --name ${CLUSTER_NAME}
+                    eksctl utils associate-iam-oidc-provider --cluster ${CLUSTER_NAME} --approve
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Prepare the cluster -------------------"
+
+                    kubectl create ns ${MONITORING_NS}
+                    kubectl create ns ${RAY_NS}
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install the metrics-server -------------------"
+
+                    helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
+                    helm repo update
+
+                    helm upgrade -i metrics-server metrics-server/metrics-server \
+                      --version ${METRICS_SERVER_CHART_VERSION} \
+                      --set containerPort=10260 \
+                      --namespace=${MONITORING_NS}
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install cert-manager -------------------"
+
+                    helm repo add jetstack https://charts.jetstack.io
+                    helm repo update
+
+                    helm upgrade -i cert-manager jetstack/cert-manager \
+                      --version ${CERT_MANAGER_CHART_VERSION} \
+                      --namespace ${OPS_NS} \
+                      --set installCRDs=true \
+                      --set webhook.securePort=10260 \
+                      --set prometheus.enabled=false \
+                      --wait
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install ALB Controller -------------------"
+
+                    export AWS_PAGER=""
+
+                    curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/refs/tags/${ALB_CONTROLLER_VERSION}/docs/install/iam_policy.json
+
+                    aws iam create-policy \
+                      --policy-name ${CLUSTER_NAME}-aws-load-balancer-controller-policy \
+                      --policy-document file://iam-policy.json
+
+                    rm iam-policy.json
+
+                    aws iam attach-role-policy --role-name ${CLUSTER_NAME}-aws-load-balancer-controller-role --policy-arn=arn:aws:iam::${AWS_ACCOUNT}:policy/${CLUSTER_NAME}-aws-load-balancer-controller-policy
+
+                    kubectl create -n kube-system serviceaccount aws-load-balancer-controller --dry-run=client -o yaml | kubectl apply -f -
+
+                    kubectl annotate serviceaccount -n ${OPS_NS} aws-load-balancer-controller eks.amazonaws.com/role-arn=arn:aws:iam::${AWS_ACCOUNT}:role/${CLUSTER_NAME}-aws-load-balancer-controller-role
+
+                    kubectl apply -k "github.com/aws/eks-charts/stable/aws-load-balancer-controller/crds?ref=master"
+
+                    helm repo add eks https://aws.github.io/eks-charts
+                    helm repo update
+
+                    helm upgrade -i aws-load-balancer-controller eks/aws-load-balancer-controller \
+                      --version ${ALB_CONTROLLER_CHART_VERSION} \
+                      --namespace ${OPS_NS} \
+                      --set vpcId=${VPC_ID} \
+                      --set region=${AWS_REGION} \
+                      --set clusterName=${CLUSTER_NAME} \
+                      --set syncPeriod="72h0m0s" \
+                      --set serviceAccount.create=false \
+                      --set serviceAccount.name=aws-load-balancer-controller \
+                      --wait
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install Karpenter -------------------"
+
+                    aws iam create-service-linked-role --aws-service-name spot.amazonaws.com || true
+
+                    export TEMPOUT=$(mktemp)
+
+                    curl -fsSL https://raw.githubusercontent.com/aws/karpenter-provider-aws/v${KARPENTER_VERSION}/website/content/en/preview/getting-started/getting-started-with-karpenter/cloudformation.yaml  > $TEMPOUT \
+                    && aws cloudformation deploy \
+                      --stack-name ${KARPENTER_STACK_NAME} \
+                      --template-file ${TEMPOUT} \
+                      --capabilities CAPABILITY_NAMED_IAM \
+                      --parameter-overrides "ClusterName=${CLUSTER_NAME}"
+
+                    aws cloudformation wait stack-create-complete --stack-name ${KARPENTER_STACK_NAME}
+
+                    aws iam attach-role-policy --role-name ${CLUSTER_NAME}-karpenter-controller-role --policy-arn=arn:aws:iam::${AWS_ACCOUNT}:policy/KarpenterControllerPolicy-${CLUSTER_NAME}
+
+                    kubectl create -n kube-system serviceaccount karpenter --dry-run=client -o yaml | kubectl apply -f -
+
+                    kubectl annotate serviceaccount -n ${OPS_NS} karpenter eks.amazonaws.com/role-arn=arn:aws:iam::${AWS_ACCOUNT}:role/${CLUSTER_NAME}-karpenter-controller-role
+
+                    eksctl create iamidentitymapping \
+                      --username {{SystemNodes}} \
+                      --cluster ${CLUSTER_NAME} \
+                      --region ${AWS_REGION} \
+                      --arn arn:aws:iam::${AWS_ACCOUNT}:role/KarpenterNodeRole-${CLUSTER_NAME} \
+                      --group system:bootstrappers \
+                      --group system:nodes
+
+                    helm upgrade -i karpenter oci://public.ecr.aws/karpenter/karpenter \
+                      --version ${KARPENTER_VERSION} \
+                      --namespace ${OPS_NS} \
+                      --set logLevel=debug \
+                      --set serviceAccount.create=false \
+                      --set serviceAccount.name=karpenter \
+                      --set "settings.clusterName=${CLUSTER_NAME}" \
+                      --set "settings.interruptionQueue=${CLUSTER_NAME}" \
+                      --set controller.resources.requests.cpu=1 \
+                      --set controller.resources.requests.memory=1Gi \
+                      --set controller.resources.limits.cpu=1 \
+                      --set controller.resources.limits.memory=1Gi \
+                      --set replicas=1 \
+                      --wait
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install Karpenter CRDs -------------------"
+
+                    envsubst < assets/karpenter/default-nodeclass.yml| kubectl apply -f -
+                    envsubst < assets/karpenter/default-nodepool.yml| kubectl apply -f -
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Deploy kube-prom-stack -------------------"
+
+                    kubectl apply -f assets/monitoring/dashboards.yml
+
+                    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+                    helm repo update
+
+                    helm upgrade -i kube-prom prometheus-community/kube-prometheus-stack \
+                      --version ${KUBE_PROM_STACK_CHART_VERSION} \
+                      --namespace ${MONITORING_NS} \
+                      --values assets/monitoring/prom-stack-values.yml
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install OTEL Operator -------------------"
+
+                    helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+                    helm repo update
+
+                    helm upgrade -i opentelemetry-operator open-telemetry/opentelemetry-operator \
+                      --version ${OTEL_OPERATOR_CHART_VERSION} \
+                      --namespace ${MONITORING_NS} \
+                      --set "manager.collectorImage.repository=public.ecr.aws/aws-observability/aws-otel-collector" \
+                      --set "manager.collectorImage.tag=${OTEL_COLLECTOR_VERSION}" \
+                      --set admissionWebhooks.certManager.enabled=true \
+                      --set admissionWebhooks.autoGenerateCert.enabled=false \
+                      --wait
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Deploy ADOT Collector -------------------"
+
+                    envsubst < assets/monitoring/adot.yml | kubectl apply -f -
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Define S3 Mountpoint volumes -------------------"
+                    envsubst < assets/mountpoint/volumes.yml | kubectl apply -f -
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install KubeRay Operator -------------------"
+
+                    helm repo add kuberay https://ray-project.github.io/kuberay-helm/
+                    helm repo update
+
+                    helm upgrade -i kuberay-operator kuberay/kuberay-operator \
+                      --version ${KUBERAY_OPERATOR_CHART_VERSION} \
+                      --namespace ${RAY_NS} \
+                      --set tolerations[0].key=restricted \
+                      --set tolerations[0].operator=Exists \
+                      --set tolerations[0].effect=NoSchedule \
+                      --wait
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Install Ray Cluster -------------------"
+
+                    kubectl create -n ray serviceaccount ray-worker --dry-run=client -o yaml | kubectl apply -f -
+
+                    kubectl annotate serviceaccount -n ${RAY_NS} ray-worker eks.amazonaws.com/role-arn=arn:aws:iam::${AWS_ACCOUNT}:role/${CLUSTER_NAME}-ray-worker-role
+
+                    envsubst < assets/ray/cluster.yml | kubectl apply -f -
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Expose services -------------------"
+
+                    export ALLOWED_CIDR_BLOCKS_LIST="[$(echo ${ALLOWED_CIDR_BLOCKS} | cut -d \, -f1-4)]"
+                    envsubst < assets/general/services.yml | kubectl apply -f -
+
+                    sleep 30;
+
+                    export RAY_HEAD_NLB_DNS=$(kubectl get \
+                      -n ${RAY_NS} service/ray-head-svc \
+                      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+                    export RAY_DASHBOARD_NLB_DNS=$(kubectl get \
+                      -n ${RAY_NS} service/ray-dashboard-svc \
+                      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+                    export GRAFANA_NLB_DNS=$(kubectl get \
+                      -n ${MONITORING_NS} service/grafana-svc \
+                      -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+                    define RAY_DASHBOARD_NLB_DNS ${RAY_DASHBOARD_NLB_DNS}
+                    define RAY_HEAD_NLB_DNS ${RAY_HEAD_NLB_DNS}
+                    define GRAFANA_NLB_DNS ${GRAFANA_NLB_DNS}
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+
+                  echo "------------------- Configure JupyterHub -------------------"
+
+                  sudo cat << EOF | sudo tee -a /opt/tljh/config/jupyterhub_config.d/environment.py
+                  c.SystemdSpawner.environment = {
+                    "WORKSHOP_BUCKET": "${WORKSHOP_BUCKET}",
+                    "JUPYTER_HUB_NLB_DNS": "${JUPYTER_HUB_NLB_DNS}",
+                    "RAY_DASHBOARD_NLB_DNS": "${RAY_DASHBOARD_NLB_DNS}",
+                    "RAY_HEAD_NLB_DNS": "${RAY_HEAD_NLB_DNS}",
+                    "GRAFANA_NLB_DNS": "${GRAFANA_NLB_DNS}",
+                    "AWS_REGION": "${AWS_REGION}",
+                  }
+                  EOF
+
+                  sudo tljh-config set services.cull.enabled False
+
+                  sudo tljh-config set services.cull.timeout 7200
+                  sudo tljh-config set services.cull.max_age 7200
+
+                  sudo tljh-config reload hub
+                  sudo tljh-config reload proxy
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Reduce permissions -------------------"
+
+                    aws iam detach-role-policy \
+                      --role-name ${WORKSHOP_NAME}-jupyterhub-instance-role \
+                      --policy-arn=arn:aws:iam::aws:policy/AdministratorAccess
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+                - |
+                  cmd='
+                    echo "------------------- Complete CFN -------------------"
+
+                    sleep 30;
+
+                    echo "{\"Status\" : \"SUCCESS\", \"Reason\": \"Bootstrap Complete\", \"UniqueId\" : \"$(uuidgen -t)\", \"Data\" : \"Bootstrap scrpit is completed.\"}" > result.json
+
+                    cat result.json | tee -a log.txt
+
+                    curl -T result.json ${CFN_UPDATE_URL}
+                  '
+                  runuser -l ubuntu -c "${cmd}" 2>&1
+
+  WorkshopBootstrapAssociation:
+    Type: AWS::SSM::Association
+    DependsOn:
+      - Instance
+      - CoreDns
+      - KubeProxy
+      - VpcCni
+      - EbsCsiDriver
+      - S3CsiDriver
+      - RayWorkerRole
+      - OtelCollectorRole
+      - AmpRemoteWriteRole
+      - AlbControllerRole
+      - KarpenterControllerRole
+    Properties:
+      Name: !Ref WorkshopBootstrapSSMDocument
+      Targets:
+        - Key: tag:Name
+          Values:
+            - !Sub ${WorkshopName}-jupyterhub-instance
+
+  # ------------------- CFN wait -------------------
+
+  WaitForClusterBootstrapHandle:
+    Type: AWS::CloudFormation::WaitConditionHandle
+
+  WaitForClusterBootstrapCondition:
+    Type: AWS::CloudFormation::WaitCondition
+    DependsOn: WorkshopBootstrapSSMDocument
+    Properties:
+      Handle: !Ref WaitForClusterBootstrapHandle
+      Timeout: '7200'
+      Count: 1
